@@ -1,0 +1,9 @@
+fastapi
+mysql-connector-python
+openai
+python-dotenv
+python-multipart
+requests
+scipy
+sounddevice
+uvicorn

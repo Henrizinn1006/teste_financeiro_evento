@@ -1,0 +1,5 @@
+.env
+audio.wav
+backend/prototipofinanceiro.db
+__pycache__/
+*.pyc
