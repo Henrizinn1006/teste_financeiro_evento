@@ -3,3 +3,5 @@ audio.wav
 backend/prototipofinanceiro.db
 __pycache__/
 *.pyc
+bot-whatsapp/node_modules/
+.wwebjs_cache/
