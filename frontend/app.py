@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from typing import Any, Optional
 
 try:
 	import sounddevice as sd  # type: ignore[import-not-found]
@@ -13,8 +16,8 @@ import requests
 API_URL = "http://127.0.0.1:8000"
 
 gravando = False
-audio_data = None
-stream = None
+audio_data: list[Any] = []
+stream: Optional[sd.InputStream] = None
 
 
 class ControleEventosApp:
@@ -173,41 +176,6 @@ class ControleEventosApp:
 		self.label_evento.config(text=f"Evento: {self.evento_selecionado['nome']}")
 		self.carregar_detalhes_evento(id_evento)
 		self.botao_historico.config(state="normal")
-
-	def ver_historico(self, id_evento):
-		self._limpar_frame()
-
-		try:
-			dados = requests.get(
-				f"{API_URL}/eventos/{id_evento}/historico",
-				timeout=5,
-			).json()
-		except requests.RequestException as exc:
-			messagebox.showerror("Erro", f"Nao foi possivel carregar historico.\n{exc}")
-			self._montar_ui_principal()
-			self.carregar_eventos()
-			return
-
-		tk.Label(self.frame, text="Historico", font=("Arial", 16)).pack(pady=10)
-
-		if not dados:
-			tk.Label(self.frame, text="Sem movimentacoes").pack()
-		else:
-			for item in dados:
-				texto = f"{item['tipo']} - R$ {item['valor']} - {item['descricao']}"
-				tk.Label(self.frame, text=texto, anchor="w").pack(fill="x", padx=10)
-
-		def voltar():
-			self._montar_ui_principal()
-			self.carregar_eventos()
-			self.abrir_evento(id_evento)
-
-		tk.Button(self.frame, text="Voltar", command=voltar).pack(pady=10)
-
-		if not hasattr(self, "botao_historico"):
-			self.botao_historico = tk.Button(self.frame, text="Ver historico")
-			self.botao_historico.pack(pady=10)
-		self.botao_historico.config(command=lambda: self.ver_historico(id_evento))
 
 	def ver_historico(self, id_evento):
 		historico_window = tk.Toplevel(self.root)
@@ -404,6 +372,10 @@ class ControleEventosApp:
 			stream.stop()
 			stream.close()
 			stream = None
+
+			if not audio_data:
+				messagebox.showwarning("Aviso", "Nenhum audio gravado.")
+				return
 
 			try:
 				import numpy as np

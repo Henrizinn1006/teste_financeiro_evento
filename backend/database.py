@@ -1,6 +1,7 @@
 import os
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -9,17 +10,36 @@ load_dotenv()
 import mysql.connector
 from mysql.connector import Error as MySQLError
 
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = int(os.getenv("DB_PORT", "3306"))
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_NAME = os.getenv("DB_NAME", "prototipofinanceiro")
-DB_MODE = os.getenv("DB_MODE", "auto").lower()
+DB_HOST: str = os.getenv("DB_HOST") or "localhost"
+DB_PORT: int = int(os.getenv("DB_PORT") or "3306")
+DB_USER: str = os.getenv("DB_USER") or "root"
+DB_PASSWORD: str = os.getenv("DB_PASSWORD") or ""
+DB_NAME: str = os.getenv("DB_NAME") or "prototipofinanceiro"
+DB_MODE: str = (os.getenv("DB_MODE") or "auto").lower()
 SQLITE_PATH = Path(__file__).with_name("prototipofinanceiro.db")
 
 _backend = None
 _mysql_ready = False
 _sqlite_ready = False
+
+
+def _safe_int(value: Any) -> int:
+	if isinstance(value, (int, float, str, bytes, bytearray)):
+		try:
+			return int(value)
+		except (TypeError, ValueError):
+			return 0
+	return 0
+
+
+def _count_from_row(row: Any) -> int:
+	if row is None:
+		return 0
+	try:
+		value = row[0]
+	except Exception:
+		return 0
+	return _safe_int(value)
 
 
 def _get_mysql_server_connection():
@@ -76,7 +96,8 @@ def _initialize_mysql():
 			"""
 		)
 		cursor.execute("SELECT COUNT(*) FROM eventos")
-		quantidade = cursor.fetchone()[0]
+		row = cursor.fetchone()
+		quantidade = _count_from_row(row)
 		if quantidade == 0:
 			cursor.executemany(
 				"INSERT INTO eventos (nome) VALUES (%s)",
@@ -128,7 +149,8 @@ def _initialize_sqlite():
 			"""
 		)
 		cursor.execute("SELECT COUNT(*) FROM eventos")
-		quantidade = cursor.fetchone()[0]
+		row = cursor.fetchone()
+		quantidade = _count_from_row(row)
 		if quantidade == 0:
 			cursor.executemany(
 				"INSERT INTO eventos (nome) VALUES (?)",

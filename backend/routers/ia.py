@@ -3,8 +3,9 @@ import base64
 import os
 import tempfile
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -18,9 +19,10 @@ except ImportError:
 try:
 	from openai import OpenAI
 	api_key = os.getenv("OPENAI_API_KEY", "")
-	client = OpenAI(api_key=api_key) if api_key else None
+	client: Optional[OpenAI] = OpenAI(api_key=api_key) if api_key else None
 	IA_DISPONIVEL = bool(api_key)
 except Exception:
+	client = None
 	IA_DISPONIVEL = False
 
 router = APIRouter()
@@ -28,6 +30,38 @@ router = APIRouter()
 
 class ChatPayload(BaseModel):
 	mensagem: str
+
+
+class MultimodalPayload(BaseModel):
+	mensagem: str = ""
+	imagem: str
+	mime_type: Optional[str] = None
+	filename: Optional[str] = None
+
+
+class AudioPayload(BaseModel):
+	audio: str
+	mime_type: Optional[str] = None
+	filename: Optional[str] = None
+
+
+def _infer_audio_suffix(mime_type: Optional[str], filename: Optional[str]) -> str:
+	if filename:
+		suffix = Path(filename).suffix
+		if suffix:
+			return suffix
+
+	if not mime_type:
+		return ".wav"
+
+	if "ogg" in mime_type:
+		return ".ogg"
+	if "mpeg" in mime_type or "mp3" in mime_type:
+		return ".mp3"
+	if "wav" in mime_type:
+		return ".wav"
+
+	return ".wav"
 
 
 def executar_acoes(resposta_ia):
@@ -54,7 +88,7 @@ def executar_acoes(resposta_ia):
 
 @router.post("/ia/chat")
 def chat_ia(dados: ChatPayload):
-	if not IA_DISPONIVEL:
+	if not IA_DISPONIVEL or client is None:
 		return {
 			"resposta": "IA nao configurada. Defina a chave OpenAI em routers/ia.py"
 		}
@@ -95,7 +129,9 @@ Mensagem:
 			]
 		)
 
-		conteudo = resposta.choices[0].message.content
+		conteudo = resposta.choices[0].message.content or ""
+		if not conteudo:
+			return {"resposta": "Resposta vazia da IA"}
 
 		try:
 			resposta_final = executar_acoes(conteudo)
@@ -115,7 +151,7 @@ async def analisar_imagem(
 	evento: int = Form(...),
 	legenda: str = Form(""),
 ):
-	if not IA_DISPONIVEL:
+	if not IA_DISPONIVEL or client is None:
 		return {"resposta": "IA nao configurada."}
 
 	imagem_bytes = await file.read()
@@ -155,7 +191,9 @@ Analise a nota fiscal e retorne APENAS JSON:
 				}
 			],
 		)
-		conteudo = response.choices[0].message.content
+		conteudo = response.choices[0].message.content or ""
+		if not conteudo:
+			return {"resposta": "Resposta vazia da IA"}
 		data = json.loads(conteudo)
 
 		adicionar_movimentacao_db(
@@ -171,15 +209,33 @@ Analise a nota fiscal e retorne APENAS JSON:
 
 
 @router.post("/ia/audio")
-async def transcrever_audio(file: UploadFile = File(...)):
-	if not IA_DISPONIVEL:
+async def transcrever_audio(request: Request, file: UploadFile = File(None)):
+	if not IA_DISPONIVEL or client is None:
 		return {"texto": "IA nao configurada."}
 
-	audio_bytes = await file.read()
+	audio_bytes = b""
+	mime_type = None
+	filename = None
+
+	if request.headers.get("content-type", "").startswith("application/json"):
+		dados = await request.json()
+		payload = AudioPayload(**dados)
+		try:
+			audio_bytes = base64.b64decode(payload.audio)
+		except Exception:
+			return {"texto": "Audio base64 invalido."}
+		mime_type = payload.mime_type
+		filename = payload.filename
+	else:
+		if file is None:
+			return {"texto": "Arquivo de audio nao enviado."}
+		filename = file.filename
+		mime_type = file.content_type
+		audio_bytes = await file.read()
 
 	temp_path = None
 	try:
-		suffix = Path(file.filename).suffix if file.filename else ".wav"
+		suffix = _infer_audio_suffix(mime_type, filename)
 		with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
 			temp_file.write(audio_bytes)
 			temp_path = temp_file.name
@@ -203,24 +259,42 @@ async def transcrever_audio(file: UploadFile = File(...)):
 
 @router.post("/ia/multimodal")
 async def multimodal(
+	request: Request,
 	mensagem: str = Form(""),
 	files: list[UploadFile] = File(default=[]),
 ):
-	if not IA_DISPONIVEL:
+	if not IA_DISPONIVEL or client is None:
 		return {"resposta": "IA nao configurada."}
 
 	imagens = []
-	for file in files:
-		conteudo = await file.read()
-		base64_img = base64.b64encode(conteudo).decode("utf-8")
+
+	if request.headers.get("content-type", "").startswith("application/json"):
+		dados = await request.json()
+		payload = MultimodalPayload(**dados)
+		mensagem = payload.mensagem
+		mime_type = payload.mime_type or "image/jpeg"
+		if not payload.imagem:
+			return {"resposta": "Imagem base64 nao enviada."}
 		imagens.append(
 			{
 				"type": "image_url",
 				"image_url": {
-					"url": f"data:image/jpeg;base64,{base64_img}"
+					"url": f"data:{mime_type};base64,{payload.imagem}"
 				},
 			}
 		)
+	else:
+		for file in files:
+			conteudo = await file.read()
+			base64_img = base64.b64encode(conteudo).decode("utf-8")
+			imagens.append(
+				{
+					"type": "image_url",
+					"image_url": {
+						"url": f"data:image/jpeg;base64,{base64_img}"
+					},
+				}
+			)
 
 	prompt = f"""
 Você é a IA Lion 🦁.
@@ -264,7 +338,9 @@ Mensagem:
 			],
 		)
 
-		conteudo = response.choices[0].message.content.strip()
+		conteudo = (response.choices[0].message.content or "").strip()
+		if not conteudo:
+			return {"resposta": "Erro ao interpretar resposta da IA"}
 		try:
 			data = json.loads(conteudo)
 		except Exception:
